@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GORE — raw &amp; unfiltered</title>
+<meta name="description" content="Uncensored user-uploaded media. 18+.">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23000'/><text x='8' y='12' font-size='11' text-anchor='middle' fill='%23c00' font-family='Impact'>G</text></svg>">
+</head>
+<body>
+
+<div id="agegate">
+  <div class="ag-box">
+    <div class="ag-logo">GORE</div>
+    <p class="ag-warn">This site contains graphic imagery of real violence and death.</p>
+    <p class="ag-sub">You must be 18 or older. If easily disturbed, leave now.</p>
+    <div class="ag-btns">
+      <button id="ag-enter" class="btn btn-red">I AM 18+ — ENTER</button>
+      <a class="btn btn-ghost" href="https://www.google.com">LEAVE</a>
+    </div>
+  </div>
+</div>
+
+<header>
+  <a href="#/" id="logo">GORE<span class="logo-dot">.</span></a>
+  <div id="searchwrap"><input id="search" placeholder="search…" autocomplete="off"></div>
+  <nav>
+    <a href="#/" data-sort="new" class="sortbtn on">NEW</a>
+    <a href="#/" data-sort="top" class="sortbtn">TOP</a>
+    <a href="#/" data-sort="views" class="sortbtn">VIEWS</a>
+  </nav>
+  <button id="uploadbtn" class="btn btn-red">+ UPLOAD</button>
+</header>
+
+<div id="tagbar"></div>
+
+<main id="app"></main>
+
+<footer>
+  <span>GORE — uncensored user uploads.</span>
+  <span>All media is user-submitted. <a href="#/about">about/rules</a></span>
+</footer>
+
+<div id="umodal" class="modal">
+  <div class="m-box">
+    <div class="m-head"><span>UPLOAD</span><button class="x" id="uclose">×</button></div>
+    <div id="udrop">
+      <p>drop a video or image here<br><span class="dim">or click to choose — mp4/webm/jpg/png/gif, up to 4GB</span></p>
+      <input type="file" id="ufile" accept="video/*,image/*" hidden>
+    </div>
+    <div id="uform" hidden>
+      <div id="uprev"></div>
+      <input id="utitle" placeholder="Title (required)" maxlength="140">
+      <textarea id="udesc" placeholder="Description — what happened, source, context" rows="4"></textarea>
+      <input id="utags" placeholder="Tags — space or comma separated (e.g. accident cartel aftermath)">
+      <input id="unick" placeholder="Nickname (optional)">
+      <label class="nsfl"><input type="checkbox" id="unsfl"> mark NSFL (thumbnail blurred)</label>
+      <div id="ubar"><div id="ubarfill"></div><span id="upct"></span></div>
+      <button id="usubmit" class="btn btn-red">POST IT</button>
+    </div>
+  </div>
+</div>
+
+<div id="reportmodal" class="modal">
+  <div class="m-box small">
+    <div class="m-head"><span>REPORT</span><button class="x" id="rclose">×</button></div>
+    <textarea id="rreason" placeholder="Why? (illegal content, spam, etc.)" rows="3"></textarea>
+    <button id="rsubmit" class="btn btn-red">SEND REPORT</button>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
