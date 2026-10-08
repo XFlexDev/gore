@@ -62,6 +62,31 @@ def itemfix_items(limit: int):
     return out
 
 
+def kaotic_items(limit: int):
+    """kaotic.com — front-page video links, og:video mp4 from each page."""
+    out = []
+    page = fetch("https://www.kaotic.com/").decode("utf-8", "replace")
+    links = []
+    for l in re.findall(r'href="(https://kaotic\.com/video/[^"]+)"', page):
+        if l not in links:
+            links.append(l)
+    for l in links:
+        if len(out) >= limit:
+            break
+        try:
+            sub = fetch(l).decode("utf-8", "replace")
+            t = re.search(r"<title>(.*?)</title>", sub, re.S)
+            title = html.unescape(t.group(1)).strip() if t else "untitled"
+            if not re.search(r'og:video[^>]*content="([^"]+)"', sub):
+                continue
+            out.append({"title": title[:140], "page_url": l,
+                        "tags": "kaotic", "desc": f"via {l}",
+                        "nick": "kaotic"})
+        except Exception:
+            continue
+    return out
+
+
 def wikimedia_items(limit: int):
     """Safe fallback: graphic historical/medical stills from Wikimedia
     Commons categories — public domain, real, unglamorous."""
@@ -98,35 +123,48 @@ def wikimedia_items(limit: int):
     return out
 
 
-SOURCES = {"itemfix": itemfix_items, "wikimedia": wikimedia_items}
+SOURCES = {"kaotic": kaotic_items, "itemfix": itemfix_items,
+           "wikimedia": wikimedia_items}
 
 
 # ---------------- upload via API ----------------
 
 def post_item(base: str, item: dict) -> bool:
-    data = fetch(item["media_url"], timeout=60)
+    media_url = item.get("media_url")
+    if not media_url and item.get("page_url"):
+        # resolve signed CDN URL right before download (it expires fast)
+        sub = fetch(item["page_url"]).decode("utf-8", "replace")
+        m = re.search(r'og:video[^>]*content="([^"]+)"', sub)
+        if not m:
+            return False
+        media_url = html.unescape(m.group(1))
+    if not media_url:
+        return False
+    data = fetch(media_url, timeout=300)
     if len(data) > MAX_FILE:
         return False
-    fname = item["media_url"].split("?")[0].rstrip("/").split("/")[-1] or "media"
+    fname = media_url.split("?")[0].rstrip("/").split("/")[-1] or "media"
     if not re.search(r"\.(mp4|webm|jpg|jpeg|png|gif|webp|mov)$", fname, re.I):
         fname += ".bin"
     r = urllib.request.Request(
         base + "/api/uploads",
         data=json.dumps({"filename": fname, "size": len(data)}).encode(),
-        headers={"Content-Type": "application/json"})
+        headers={"Content-Type": "application/json", "User-Agent": UA})
     uid = json.loads(urllib.request.urlopen(r, timeout=30).read())["upload_id"]
     r = urllib.request.Request(
-        f"{base}/api/uploads/{uid}/chunk?offset=0", data=data, method="PUT")
+        f"{base}/api/uploads/{uid}/chunk?offset=0", data=data, method="PUT",
+        headers={"User-Agent": UA})
     urllib.request.urlopen(r, timeout=120).read()
     fin = json.loads(urllib.request.urlopen(
         urllib.request.Request(f"{base}/api/uploads/{uid}/complete",
-                               data=b"", method="POST"), timeout=30).read())
+                               data=b"", method="POST",
+                               headers={"User-Agent": UA}), timeout=30).read())
     body = {"file": fin["file"], "title": item["title"][:140] or "untitled",
             "description": item.get("desc", ""), "tags": item.get("tags", ""),
             "nick": item.get("nick", "bot")}
     r = urllib.request.Request(base + "/api/posts",
         data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"})
+        headers={"Content-Type": "application/json", "User-Agent": UA})
     urllib.request.urlopen(r, timeout=30).read()
     return True
 
