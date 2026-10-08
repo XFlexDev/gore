@@ -524,7 +524,7 @@ async def cache_headers(request: Request, call_next):
     path = request.url.path
     if path == "/api/feed":
         resp.headers["Cache-Control"] = "public, s-maxage=8, max-age=0"
-    elif path.startswith(("/app.js", "/admin.js", "/style.css")) or \
+    elif path.startswith(("/app.v", "/admin.v", "/style.v")) or \
             path.endswith((".css", ".js", ".png", ".ico", ".woff2")):
         resp.headers.setdefault("Cache-Control", "public, max-age=3600")
     return resp
