@@ -15,7 +15,7 @@ import sqlite3
 import string
 import subprocess
 import time
-from contextlib import contextmanager
+from collections import defaultdict
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
@@ -85,10 +85,24 @@ CREATE TABLE IF NOT EXISTS reports (
     reason TEXT DEFAULT '',
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    pass_hash TEXT NOT NULL,
+    status TEXT DEFAULT 'active',
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at REAL NOT NULL,
+    expires REAL NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);
 CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id);
 CREATE INDEX IF NOT EXISTS idx_reports_post ON reports(post_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_exp ON sessions(expires);
 """
 
 with db() as c:
@@ -118,6 +132,118 @@ def clean_tags(s: str) -> str:
 def voter_id(req: Request) -> str:
     raw = f"{req.client.host}|{req.headers.get('user-agent','')}|gore"
     return hashlib.sha256(raw.encode()).hexdigest()[:20]
+
+
+# ---------------- auth ----------------
+
+SESSION_TTL = 30 * 86400
+
+
+PBKDF2_ITER = 260_000
+
+
+def hash_password(pw: str) -> str:
+    salt = secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(),
+                          PBKDF2_ITER).hex()
+    return f"pbkdf2${PBKDF2_ITER}${salt}${h}"
+
+
+def verify_password(pw: str, stored: str) -> bool:
+    try:
+        _, iters, salt, h = stored.split("$")
+        c = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(),
+                                int(iters)).hex()
+        return secrets.compare_digest(c, h)
+    except Exception:
+        return False
+
+
+def current_user(req: Request):
+    tok = req.cookies.get("gore_sess", "")
+    if not tok or len(tok) > 128:
+        return None
+    with db() as c:
+        return c.execute(
+            "SELECT u.id, u.username FROM sessions s JOIN users u "
+            "ON u.id=s.user_id WHERE s.token=? AND s.expires>? "
+            "AND u.status='active'", (tok, time.time())).fetchone()
+
+
+def new_session(user_id: int) -> str:
+    tok = secrets.token_hex(32)
+    now = time.time()
+    with db() as c:
+        c.execute("DELETE FROM sessions WHERE expires<?", (now,))
+        c.execute("INSERT INTO sessions(token,user_id,created_at,expires) "
+                  "VALUES(?,?,?,?)", (tok, user_id, now, now + SESSION_TTL))
+    return tok
+
+
+# ---------------- rate limiting ----------------
+
+_hits = defaultdict(list)
+
+
+def rate_limit(key: str, limit: int, window: int):
+    now = time.time()
+    h = [t for t in _hits[key] if t > now - window]
+    if len(h) >= limit:
+        raise HTTPException(429, "slow down")
+    h.append(now)
+    _hits[key] = h
+
+
+@app.post("/api/auth/register")
+def register(body: dict, request: Request, response: Response):
+    rate_limit(f"reg:{request.client.host}", 10, 3600)
+    username = clean(body.get("username"), 24)
+    if not re.fullmatch(r"[a-zA-Z0-9_.\-]{3,24}", username or ""):
+        raise HTTPException(400, "username: 3-24 letters, digits, _ . -")
+    pw = body.get("password") or ""
+    if len(pw) < 6 or len(pw) > 200:
+        raise HTTPException(400, "password: 6+ chars")
+    with db() as c:
+        if c.execute("SELECT 1 FROM users WHERE username=?",
+                     (username,)).fetchone():
+            raise HTTPException(409, "username taken")
+        cur = c.execute("INSERT INTO users(username,pass_hash,created_at) "
+                        "VALUES(?,?,?)",
+                        (username, hash_password(pw), time.time()))
+        uid = cur.lastrowid
+    response.set_cookie("gore_sess", new_session(uid), httponly=True,
+                        secure=True, samesite="lax", max_age=SESSION_TTL)
+    return {"username": username}
+
+
+@app.post("/api/auth/login")
+def login(body: dict, request: Request, response: Response):
+    rate_limit(f"login:{request.client.host}", 10, 300)
+    username = clean(body.get("username"), 24)
+    pw = body.get("password") or ""
+    with db() as c:
+        u = c.execute("SELECT id,pass_hash FROM users WHERE username=? "
+                      "AND status='active'", (username,)).fetchone()
+    if not u or not verify_password(pw, u["pass_hash"]):
+        raise HTTPException(401, "bad credentials")
+    response.set_cookie("gore_sess", new_session(u["id"]), httponly=True,
+                        secure=True, samesite="lax", max_age=SESSION_TTL)
+    return {"username": username}
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request, response: Response):
+    tok = request.cookies.get("gore_sess", "")
+    with db() as c:
+        c.execute("DELETE FROM sessions WHERE token=?", (tok,))
+    response.delete_cookie("gore_sess")
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def me(request: Request):
+    u = current_user(request)
+    return {"username": u["username"] if u else None}
 
 
 def check_admin(x_admin_token: str = ""):
@@ -236,7 +362,8 @@ def media(name: str, request: Request):
 # ---------------- chunked upload ----------------
 
 @app.post("/api/uploads")
-def new_upload(body: dict):
+def new_upload(body: dict, request: Request):
+    rate_limit(f"upl:{voter_id(request)}", 30, 3600)
     fname = clean(body.get("filename", "file"), 120)
     size = int(body.get("size") or 0)
     if size <= 0 or size > MAX_UPLOAD:
@@ -269,6 +396,29 @@ async def chunk(uid: str, request: Request, offset: int = Query(0)):
     return {"received": meta["received"], "size": meta["size"]}
 
 
+def _valid_media(path: Path, ext: str) -> bool:
+    """Reject anything ffprobe can't read as video or a known image ext."""
+    if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+        try:
+            r = subprocess.run(["ffprobe", "-v", "quiet", str(path)],
+                               capture_output=True, timeout=15)
+            return r.returncode == 0
+        except Exception:
+            return False
+    if ext not in (".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi",
+                   ".mpg", ".mpeg"):
+        return False
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_streams", str(path)],
+            capture_output=True, text=True, timeout=30).stdout
+        return any(s.get("codec_type") == "video"
+                   for s in json.loads(out or "{}").get("streams", []))
+    except Exception:
+        return False
+
+
 @app.post("/api/uploads/{uid}/complete")
 def complete(uid: str):
     f = TMP_DIR / uid
@@ -285,6 +435,9 @@ def complete(uid: str):
     dst = MEDIA_DIR / name
     f.rename(dst)
     meta_f.unlink(missing_ok=True)
+    if not _valid_media(dst, ext):
+        dst.unlink(missing_ok=True)
+        raise HTTPException(400, "not a valid video/image file")
     if ext in (".mp4", ".m4v", ".mov"):
         # move moov atom up front so playback starts instantly
         fast = MEDIA_DIR / (name + ".fast.mp4")
@@ -428,11 +581,15 @@ def vote(s: str, body: dict, request: Request):
 
 
 @app.post("/api/post/{s}/comment")
-def comment(s: str, body: dict):
+def comment(s: str, body: dict, request: Request):
+    u = current_user(request)
+    if not u:
+        raise HTTPException(401, "sign in to comment")
+    rate_limit(f"cmt:{u['id']}", 20, 300)
     text = clean(body.get("body"), 2000)
     if not text:
         raise HTTPException(400, "empty")
-    nick = clean(body.get("nick"), 40) or "anonymous"
+    nick = u["username"]
     with db() as c:
         p = c.execute("SELECT id FROM posts WHERE slug=? AND status='active'",
                       (s,)).fetchone()
@@ -444,7 +601,8 @@ def comment(s: str, body: dict):
 
 
 @app.post("/api/post/{s}/report")
-def report(s: str, body: dict):
+def report(s: str, body: dict, request: Request):
+    rate_limit(f"rep:{voter_id(request)}", 10, 600)
     reason = clean(body.get("reason"), 300)
     with db() as c:
         p = c.execute("SELECT id FROM posts WHERE slug=? AND status='active'",
@@ -519,14 +677,23 @@ def stats():
 
 
 @app.middleware("http")
-async def cache_headers(request: Request, call_next):
+async def security_headers(request: Request, call_next):
     resp = await call_next(request)
     path = request.url.path
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
     if path == "/api/feed":
         resp.headers["Cache-Control"] = "public, s-maxage=8, max-age=0"
     elif path.startswith(("/app.v", "/admin.v", "/style.v")) or \
             path.endswith((".css", ".js", ".png", ".ico", ".woff2")):
         resp.headers.setdefault("Cache-Control", "public, max-age=3600")
+    if path in ("/", "/index.html", "/admin.html"):
+        resp.headers["Content-Security-Policy"] = (
+            "default-src 'self'; img-src 'self' data: blob:; "
+            "media-src 'self' blob:; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; connect-src 'self'; "
+            "frame-ancestors 'none'; base-uri 'none'")
     return resp
 
 

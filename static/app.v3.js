@@ -27,6 +27,57 @@ function toast(msg) {
 if (localStorage.gore_age === '1') $('#agegate').classList.add('gone');
 $('#ag-enter').onclick = () => { localStorage.gore_age = '1'; $('#agegate').classList.add('gone'); };
 
+/* ---------- auth ---------- */
+let me = null;
+let authMode = 'login';
+
+function paintAuth() {
+  if (me) {
+    $('#who').innerHTML = `${avatar(me)}<span class="whoname">${esc(me)}</span><a id="logout" class="dim-link">log out</a>`;
+    $('#loginbtn').style.display = 'none';
+    $('#regbtn').style.display = 'none';
+    $('#logout').onclick = async () => {
+      await api('/api/auth/logout', { method: 'POST' });
+      me = null; paintAuth(); render();
+    };
+  } else {
+    $('#who').innerHTML = '';
+    $('#loginbtn').style.display = '';
+    $('#regbtn').style.display = '';
+  }
+}
+
+function openAuth(mode) {
+  authMode = mode;
+  $('#atitle').textContent = mode === 'login' ? 'Log in' : 'Register';
+  $('#asubmit').textContent = mode === 'login' ? 'Log in' : 'Create account';
+  $('#aswitch').textContent = mode === 'login'
+    ? 'Need an account? Register' : 'Have an account? Log in';
+  $('#aerr').textContent = '';
+  $('#authmodal').classList.add('open');
+  setTimeout(() => $('#auser').focus(), 50);
+}
+$('#loginbtn').onclick = () => openAuth('login');
+$('#regbtn').onclick = () => openAuth('register');
+$('#aclose').onclick = () => $('#authmodal').classList.remove('open');
+$('#aswitch').onclick = () => openAuth(authMode === 'login' ? 'register' : 'login');
+$('#apass').addEventListener('keydown', e => { if (e.key === 'Enter') $('#asubmit').click(); });
+$('#asubmit').onclick = async () => {
+  const username = $('#auser').value.trim(), password = $('#apass').value;
+  try {
+    const r = await api('/api/auth/' + authMode, { method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ username, password }) });
+    me = r.username; paintAuth();
+    $('#authmodal').classList.remove('open');
+    $('#auser').value = $('#apass').value = '';
+    toast(`welcome, ${me}`);
+    render();
+  } catch (e) { $('#aerr').textContent = e.message; }
+};
+
+api('/api/auth/me').then(r => { me = r.username; paintAuth(); });
+
 /* ---------- routing ---------- */
 function parseHash() {
   const h = location.hash.slice(2) || '';
@@ -150,11 +201,14 @@ async function renderPost(s) {
         </div>
       </div>`).join('') || '<div class="msg dim">no comments yet</div>'}
     </div>
-    <div class="cmtform">
-      <input id="cnick" placeholder="Nickname (optional)" maxlength="40">
+    ${me ? `<div class="cmtform">
+      <div class="dim" style="font-size:12px">commenting as <b>${esc(me)}</b></div>
       <textarea id="cbody" placeholder="Write a reply…" rows="3"></textarea>
       <div><button class="btn-blue sm" id="csend">Post reply</button></div>
-    </div>
+    </div>` : `<div class="cmtform" style="align-items:center;padding:20px">
+      <span class="dim">You must be signed in to comment.</span>
+      <button class="btn-blue sm" id="clogin">Log in</button>
+    </div>`}
   </div>`;
   api(`/api/post/${s}/view`, { method: 'POST' });
   const vote = async dir => {
@@ -164,13 +218,17 @@ async function renderPost(s) {
   };
   $('#vup').onclick = () => vote(1).catch(e => toast(e.message));
   $('#vdown').onclick = () => vote(-1).catch(e => toast(e.message));
-  $('#csend').onclick = async () => {
+  const csend = $('#csend'), clogin = $('#clogin');
+  if (clogin) clogin.onclick = () => openAuth('login');
+  if (csend) csend.onclick = async () => {
     const body = $('#cbody').value.trim();
     if (!body) return;
-    await api(`/api/post/${s}/comment`, { method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ body, nick: $('#cnick').value }) });
-    renderPost(s);
+    try {
+      await api(`/api/post/${s}/comment`, { method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ body }) });
+      renderPost(s);
+    } catch (e) { toast(e.message); }
   };
   $('#reportbtn').onclick = () => { reportTarget = s; $('#reportmodal').classList.add('open'); };
 }
