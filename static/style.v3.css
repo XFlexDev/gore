@@ -166,7 +166,8 @@ button,input,textarea{font:inherit;color:inherit}
 
 /* ---------- modals ---------- */
 .modal{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.6);
-  display:none;align-items:flex-start;justify-content:center;padding:7vh 14px}
+  display:none;align-items:flex-start;justify-content:center;
+  padding:4vh 14px;overflow-y:auto}
 .modal.open{display:flex}
 .m-box{background:#fff;border-radius:4px;width:560px;max-width:100%;
   padding:0;box-shadow:0 6px 30px rgba(0,0,0,.35);overflow:hidden}
@@ -240,7 +241,7 @@ button,input,textarea{font:inherit;color:inherit}
   .player video,.player img{max-height:55vh}
   .msg{padding:10px;gap:9px}
   .msg .mav{width:36px;height:36px;font-size:14px}
-  .m-box{width:100%;max-height:88vh;overflow-y:auto}
+  .m-box{width:100%}
   .ag-card{padding:18px}
   .ag-row{gap:12px}
   .ag-circle{width:56px;height:56px;font-size:16px}
