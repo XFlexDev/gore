@@ -282,8 +282,20 @@ def complete(uid: str):
     if not re.fullmatch(r"\.[a-z0-9]{1,8}", ext or ""):
         ext = ""
     name = slug(12) + ext
-    f.rename(MEDIA_DIR / name)
+    dst = MEDIA_DIR / name
+    f.rename(dst)
     meta_f.unlink(missing_ok=True)
+    if ext in (".mp4", ".m4v", ".mov"):
+        # move moov atom up front so playback starts instantly
+        fast = MEDIA_DIR / (name + ".fast.mp4")
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(dst), "-c", "copy",
+             "-movflags", "+faststart", str(fast)],
+            capture_output=True, timeout=300)
+        if r.returncode == 0 and fast.exists():
+            fast.replace(dst)
+        else:
+            fast.unlink(missing_ok=True)
     return {"file": name, "mime": _mime(Path(name))}
 
 
@@ -338,8 +350,18 @@ def feed(sort: str = "new", tag: str = "", q: str = "",
         total = c.execute(f"SELECT COUNT(*) n FROM posts WHERE {w}",
                           args).fetchone()["n"]
         rows = c.execute(
-            f"SELECT * FROM posts WHERE {w} ORDER BY {order}, id DESC "
-            f"LIMIT ? OFFSET ?", args + [per, (page - 1) * per]).fetchall()
+            f"""SELECT p.*,
+                 (SELECT COUNT(*) FROM comments cm WHERE cm.post_id=p.id
+                    AND cm.status='active') comments_count,
+                 (SELECT body FROM comments cm WHERE cm.post_id=p.id
+                    AND cm.status='active' ORDER BY id DESC LIMIT 1) latest_body,
+                 (SELECT nick FROM comments cm WHERE cm.post_id=p.id
+                    AND cm.status='active' ORDER BY id DESC LIMIT 1) latest_nick,
+                 (SELECT created_at FROM comments cm WHERE cm.post_id=p.id
+                    AND cm.status='active' ORDER BY id DESC LIMIT 1) latest_at
+               FROM posts p WHERE {w} ORDER BY {order}, p.id DESC
+               LIMIT ? OFFSET ?""",
+            args + [per, (page - 1) * per]).fetchall()
         tags = c.execute(
             "SELECT tags FROM posts WHERE status='active' AND tags!='' "
             "ORDER BY created_at DESC LIMIT 400").fetchall()
@@ -494,6 +516,18 @@ def stats():
         cm = c.execute("SELECT COUNT(*) n FROM comments WHERE status='active'"
                        ).fetchone()
     return {"posts": p["n"], "views": p["v"], "comments": cm["n"]}
+
+
+@app.middleware("http")
+async def cache_headers(request: Request, call_next):
+    resp = await call_next(request)
+    path = request.url.path
+    if path == "/api/feed":
+        resp.headers["Cache-Control"] = "public, s-maxage=8, max-age=0"
+    elif path.startswith(("/app.js", "/admin.js", "/style.css")) or \
+            path.endswith((".css", ".js", ".png", ".ico", ".woff2")):
+        resp.headers.setdefault("Cache-Control", "public, max-age=3600")
+    return resp
 
 
 app.mount("/", StaticFiles(directory=BASE_DIR / "static", html=True),

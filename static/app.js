@@ -1,13 +1,17 @@
 const $ = s => document.querySelector(s);
 const app = $('#app');
 let state = { sort: 'new', tag: '', q: '', page: 1 };
-let feedTags = [];
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtDur = s => s > 0 ? `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}` : '';
-const fmtTime = t => { const d = (Date.now()/1000 - t); if (d<60) return 'just now'; if (d<3600) return `${d/60|0}m ago`; if (d<86400) return `${d/3600|0}h ago`; return `${d/86400|0}d ago`; };
-const fmtN = n => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'k' : String(n);
+const fmtTime = t => { const d = (Date.now()/1000 - t); if (d<60) return 'just now'; if (d<3600) return `${d/60|0} minutes ago`; if (d<86400) return `${d/3600|0} hours ago`; return `${d/86400|0} days ago`; };
+const fmtN = n => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n||0);
+
+const AVCOLORS = ['#5cb85c','#7b6fd0','#c94f6d','#b8860b','#4582b4','#777','#a0522d','#2e8b57'];
+const avColor = n => AVCOLORS[[...String(n||'a')].reduce((a,c)=>a+c.charCodeAt(0),0) % AVCOLORS.length];
+const avatar = (nick, cls='lav') =>
+  `<span class="${cls}" style="background:${avColor(nick)}">${esc((nick||'a')[0].toUpperCase())}</span>`;
 
 async function api(path, opts={}) {
   const r = await fetch(path, opts);
@@ -26,8 +30,8 @@ $('#ag-enter').onclick = () => { localStorage.gore_age = '1'; $('#agegate').clas
 /* ---------- routing ---------- */
 function parseHash() {
   const h = location.hash.slice(2) || '';
-  const [route, arg] = h.split('/');
-  return { route: route || 'feed', arg: arg || '' };
+  const [route, ...rest] = h.split('/');
+  return { route: route || 'feed', arg: rest.join('/') || '' };
 }
 window.addEventListener('hashchange', render);
 $('#search').addEventListener('keydown', e => {
@@ -36,7 +40,7 @@ $('#search').addEventListener('keydown', e => {
 document.querySelectorAll('.sortbtn').forEach(b => b.onclick = e => {
   e.preventDefault(); state.sort = b.dataset.sort; state.page = 1;
   document.querySelectorAll('.sortbtn').forEach(x => x.classList.toggle('on', x === b));
-  if (location.hash !== '#/' ) location.hash = '#/';
+  if (location.hash !== '#/') location.hash = '#/';
   render();
 });
 
@@ -45,91 +49,111 @@ async function render() {
   if (route === 'p') return renderPost(arg);
   if (route === 'tag') { state.tag = arg; state.page = 1; return renderFeed(); }
   if (route === 'about') return renderAbout();
-  if (route === 'feed' || route === '') {
-    if (parseHash().route !== 'tag') state.tag = '';
-    return renderFeed();
-  }
-  renderFeed();
+  state.tag = '';
+  return renderFeed();
+}
+
+/* ---------- sidebar ---------- */
+async function renderSidebar(data) {
+  $('#tagw').innerHTML = data.tags.map(t =>
+    `<a class="tag ${t===state.tag?'on':''}" href="#/tag/${esc(t)}">#${esc(t)}</a>`).join('')
+    || '<span class="dim">none yet</span>';
+  const latest = data.posts.filter(p => p.latest_body).slice(0, 6);
+  $('#latest').innerHTML = latest.map(p => `
+    <div class="witem">${avatar(p.latest_nick)}
+      <div class="wtxt">
+        <a class="wt" href="#/p/${p.slug}">${esc(p.latest_body.slice(0, 60))}</a>
+        <span class="wm">${fmtTime(p.latest_at)} · ${esc(p.latest_nick)} · in
+        <a href="#/p/${p.slug}">${esc(p.title.slice(0, 28))}</a></span>
+      </div>
+    </div>`).join('') || '<span class="dim">no comments yet</span>';
+  const s = await api('/api/stats');
+  $('#sitestats').innerHTML = `
+    <div><span class="k">Posts:</span><b>${fmtN(s.posts)}</b></div>
+    <div><span class="k">Views:</span><b>${fmtN(s.views)}</b></div>
+    <div><span class="k">Comments:</span><b>${fmtN(s.comments)}</b></div>`;
 }
 
 /* ---------- feed ---------- */
+function nodeHtml(p) {
+  const isNew = Date.now()/1000 - p.created_at < 86400;
+  const nsfl = p.tags.includes('nsfl');
+  const latest = p.latest_body
+    ? `${avatar(p.latest_nick)}<span class="lt">${esc(p.latest_body.slice(0, 80))}</span>
+       <span class="lm">${fmtTime(p.latest_at)} · ${esc(p.latest_nick)}</span>`
+    : `${avatar(p.nick)}<span class="lt" style="font-weight:400">No comments yet</span>
+       <span class="lm">${fmtTime(p.created_at)} · ${esc(p.nick)}</span>`;
+  return `<a class="node" href="#/p/${p.slug}">
+    <span class="av">${p.thumb_url ? `<img loading="lazy" src="${p.thumb_url}" alt="">` : (p.nick||'a')[0].toUpperCase()}</span>
+    <span class="ni">
+      <span class="n-title">${esc(p.title)}</span>${isNew ? '<span class="badge-new">New</span>' : ''}${nsfl ? '<span class="badge-new badge-nsfl">NSFL</span>' : ''}
+      <div class="n-stats">👁 ${fmtN(p.views)}&ensp;·&ensp;💬 ${fmtN(p.comments_count)}&ensp;·&ensp;▲ ${p.score}${p.duration ? '&ensp;·&ensp;'+fmtDur(p.duration) : ''}</div>
+      <div class="n-latest">${latest}</div>
+    </span>
+  </a>`;
+}
+
 async function renderFeed() {
-  app.innerHTML = '<div class="empty">loading…</div>';
+  $('#ptitle').textContent = 'Media list';
+  $('#crumb').textContent = 'New Posts' + (state.tag ? ` — #${state.tag}` : '') + (state.q ? ` — "${state.q}"` : '');
+  app.innerHTML = '<div class="cathead">MAIN <span class="chev">▲</span></div><div class="empty">loading…</div>';
   const p = new URLSearchParams({ sort: state.sort, tag: state.tag, q: state.q, page: state.page });
   const data = await api('/api/feed?' + p);
-  feedTags = data.tags;
-  $('#tagbar').innerHTML = feedTags.map(t =>
-    `<span class="tag ${t===state.tag?'on':''}" data-t="${esc(t)}">#${esc(t)}</span>`).join('');
-  document.querySelectorAll('#tagbar .tag').forEach(el => el.onclick = () => {
-    state.tag = el.dataset.t === state.tag ? '' : el.dataset.t; state.page = 1; renderFeed();
-  });
-  if (!data.posts.length) { app.innerHTML = '<div class="empty">nothing here yet. upload something.</div>'; return; }
+  renderSidebar(data);
   const pages = Math.ceil(data.total / data.per);
-  app.innerHTML = `<div class="grid">` + data.posts.map(p => `
-    <a class="card" href="#/p/${p.slug}">
-      <div class="thumb ${p.tags.includes('nsfl') ? 'blurred' : ''}">
-        ${p.thumb_url ? `<img loading="lazy" src="${p.thumb_url}" alt="">` : ''}
-        ${p.duration ? `<span class="dur">${fmtDur(p.duration)}</span>` : ''}
-      </div>
-      <div class="c-body">
-        <div class="c-title">${esc(p.title)}</div>
-        <div class="c-meta">
-          <span class="${p.score < 0 ? 'neg' : 'score'}">${p.score > 0 ? '+' : ''}${p.score}</span>
-          <span>${fmtN(p.views)} views</span><span>${fmtTime(p.created_at)}</span>
-          <span>${esc(p.nick)}</span>
-        </div>
-      </div>
-    </a>`).join('') + `</div>` +
+  const body = data.posts.length
+    ? `<div class="nodes">${data.posts.map(nodeHtml).join('')}</div>`
+    : '<div class="empty">nothing here yet. upload something.</div>';
+  app.innerHTML = '<div class="cathead">MAIN <span class="chev">▲</span></div>' + body +
     (pages > 1 ? `<div class="pager">
-      ${state.page > 1 ? '<button class="btn sm" id="prev">← prev</button>' : ''}
-      <span class="dim" style="align-self:center">${state.page} / ${pages}</span>
-      ${state.page < pages ? '<button class="btn sm" id="next">next →</button>' : ''}
+      ${state.page > 1 ? '<button class="btn-ghost sm" id="prev">← prev</button>' : ''}
+      <span class="dim">${state.page} / ${pages}</span>
+      ${state.page < pages ? '<button class="btn-ghost sm" id="next">next →</button>' : ''}
     </div>` : '');
   const nx = $('#next'), pv = $('#prev');
   if (nx) nx.onclick = () => { state.page++; renderFeed(); scrollTo(0,0); };
   if (pv) pv.onclick = () => { state.page--; renderFeed(); scrollTo(0,0); };
 }
 
-/* ---------- post ---------- */
+/* ---------- post (thread) page ---------- */
 let reportTarget = null;
 async function renderPost(s) {
+  $('#ptitle').textContent = '';
+  $('#crumb').innerHTML = '<a href="#/">Media list</a>';
   app.innerHTML = '<div class="empty">loading…</div>';
   let data;
   try { data = await api('/api/post/' + s); }
   catch { app.innerHTML = '<div class="empty">post not found (removed?).</div>'; return; }
   const p = data.post;
+  $('#ptitle').textContent = p.title;
   const mediaHtml = p.media_kind === 'video'
     ? `<video controls preload="metadata" src="${p.media_url}" poster="${p.thumb_url}"></video>`
     : `<img src="${p.media_url}" alt="">`;
-  app.innerHTML = `<div class="post">
+  app.innerHTML = `<div class="panel">
     <div class="player">${mediaHtml}</div>
-    <div class="p-head">
-      <div class="p-title">${esc(p.title)}</div>
-      <div class="p-meta">
-        <span class="votes">
-          <button id="vup">▲</button>
-          <span class="vscore" id="vscore">${p.score}</span>
-          <button id="vdown">▼</button>
-        </span>
-        <span>${fmtN(p.views)} views</span>
-        <span>${new Date(p.created_at*1000).toLocaleString()}</span>
-        <span>by ${esc(p.nick)}</span>
-        <span class="reportlink" id="reportbtn">⚑ report</span>
-      </div>
+    <div class="p-title">${esc(p.title)}</div>
+    <div class="p-meta">
+      <span class="votes"><button id="vup">▲</button><span class="vscore" id="vscore">${p.score}</span><button id="vdown">▼</button></span>
+      <span>👁 ${fmtN(p.views)} views</span>
+      <span>${new Date(p.created_at*1000).toLocaleString()}</span>
+      <span>by <b>${esc(p.nick)}</b></span>
+      <span class="reportlink" id="reportbtn">⚑ report</span>
     </div>
-    ${p.tags.length ? `<div class="p-tags" style="padding-top:14px">${p.tags.map(t => `<a class="tag" href="#/tag/${esc(t)}">#${esc(t)}</a>`).join('')}</div>` : ''}
+    ${p.tags.length ? `<div class="p-tags">${p.tags.map(t => `<a class="tag" href="#/tag/${esc(t)}">#${esc(t)}</a>`).join('')}</div>` : ''}
     ${p.description ? `<div class="p-desc">${esc(p.description)}</div>` : ''}
-    <div class="comments">
-      <h3>COMMENTS (${data.comments.length})</h3>
-      <div class="cmtform">
-        <input id="cnick" placeholder="nickname (optional)" maxlength="40">
-        <textarea id="cbody" placeholder="say something…" rows="3"></textarea>
-        <button class="btn sm" id="csend" style="width:120px">COMMENT</button>
-      </div>
-      <div id="cmts">${data.comments.map(c => `
-        <div class="cmt"><span class="who">${esc(c.nick)}</span><span class="when">${fmtTime(c.created_at)}</span>
-        <div class="txt">${esc(c.body)}</div></div>`).join('') || '<div class="empty" style="padding:24px">no comments yet</div>'}
-      </div>
+    <div class="msg" style="background:#f7f7f7;font-weight:700;font-size:12px;color:#666">COMMENTS (${data.comments.length})</div>
+    <div id="cmts">${data.comments.map(c => `
+      <div class="msg">${avatar(c.nick, 'mav')}
+        <div class="mbody">
+          <div class="mhead"><span class="who">${esc(c.nick)}</span><span class="when">${fmtTime(c.created_at)}</span></div>
+          <div class="txt">${esc(c.body)}</div>
+        </div>
+      </div>`).join('') || '<div class="msg dim">no comments yet</div>'}
+    </div>
+    <div class="cmtform">
+      <input id="cnick" placeholder="Nickname (optional)" maxlength="40">
+      <textarea id="cbody" placeholder="Write a reply…" rows="3"></textarea>
+      <div><button class="btn-blue sm" id="csend">Post reply</button></div>
     </div>
   </div>`;
   api(`/api/post/${s}/view`, { method: 'POST' });
@@ -156,18 +180,19 @@ $('#rsubmit').onclick = async () => {
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ reason: $('#rreason').value }) });
   $('#reportmodal').classList.remove('open'); $('#rreason').value = '';
-  toast('report sent. thanks.');
+  toast('Report sent.');
 };
 
-/* ---------- about ---------- */
+/* ---------- about / rules ---------- */
 function renderAbout() {
-  app.innerHTML = `<div class="post"><div class="p-desc">
-<h2 style="margin-bottom:14px">GORE</h2>
-<p>Uncensored, user-uploaded media. The raw feed.</p>
+  $('#ptitle').textContent = 'Rules';
+  $('#crumb').textContent = 'Rules';
+  app.innerHTML = `<div class="panel"><div class="p-desc" style="padding:16px">
+<p><b>GORE</b> — uncensored, user-uploaded media. The raw feed.</p>
 <br>
 <p><b>Rules</b></p>
 <p>• You must be 18+ to view or upload.<br>
-• No CSAM — zero tolerance, reports go straight to moderation and authorities.<br>
+• No CSAM — zero tolerance, reported to authorities.<br>
 • No doxxing of private individuals. No spam.<br>
 • Mark extreme content with the <b>nsfl</b> tag.<br>
 • Uploads are anonymous unless you set a nickname.</p>
@@ -182,6 +207,7 @@ function renderAbout() {
 /* ---------- upload ---------- */
 const CHUNK = 32 * 1024 * 1024;
 let uFile = null;
+const utitle = $('#utitle'), udesc = $('#udesc'), utags = $('#utags'), unick = $('#unick');
 $('#uploadbtn').onclick = () => { $('#umodal').classList.add('open'); };
 $('#uclose').onclick = () => $('#umodal').classList.remove('open');
 const drop = $('#udrop'), fileIn = $('#ufile');
@@ -214,9 +240,8 @@ $('#usubmit').onclick = async () => {
     let off = 0;
     while (off < uFile.size) {
       const end = Math.min(off + CHUNK, uFile.size);
-      const blob = uFile.slice(off, end);
       const r = await fetch(`/api/uploads/${upload_id}/chunk?offset=${off}`,
-        { method: 'PUT', body: blob });
+        { method: 'PUT', body: uFile.slice(off, end) });
       if (!r.ok) throw new Error('chunk failed');
       const j = await r.json(); off = j.received;
       const pct = Math.round(off / uFile.size * 100);
@@ -229,7 +254,7 @@ $('#usubmit').onclick = async () => {
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ file: fin.file, title,
         description: udesc.value, tags, nick: unick.value }) });
-    toast('posted.');
+    toast('Posted.');
     location.hash = '#' + post.url;
     $('#umodal').classList.remove('open');
     uFile = null; utitle.value = udesc.value = utags.value = unick.value = '';
@@ -238,6 +263,5 @@ $('#usubmit').onclick = async () => {
   } catch (e) { toast('upload failed: ' + e.message); }
   btn.disabled = false;
 };
-const utitle = $('#utitle'), udesc = $('#udesc'), utags = $('#utags'), unick = $('#unick');
 
 render();

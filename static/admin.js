@@ -11,8 +11,8 @@ async function api(path, opts={}) {
   if (!r.ok) throw new Error((await r.json().catch(()=>({}))).detail || r.statusText);
   return r.json();
 }
-document.querySelectorAll('#tagbar .tag').forEach(t => t.onclick = () => {
-  document.querySelectorAll('#tagbar .tag').forEach(x => x.classList.toggle('on', x === t));
+document.querySelectorAll('.tagbar .tag').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tagbar .tag').forEach(x => x.classList.toggle('on', x === t));
   mode = t.dataset.v; load();
 });
 $('#load').onclick = () => { localStorage.gore_admin = $('#tok').value; load(); };
@@ -28,8 +28,8 @@ function row(p, extra) {
       ${extra || ''}</div>
     <span class="dim">${p.status}</span>
     ${p.status === 'active'
-      ? `<button class="btn sm" data-act="remove" data-s="${p.slug}">REMOVE</button>`
-      : `<button class="btn sm" data-act="restore" data-s="${p.slug}">RESTORE</button>`}
+      ? `<button class="btn-ghost sm" data-act="remove" data-s="${p.slug}">REMOVE</button>`
+      : `<button class="btn-ghost sm" data-act="restore" data-s="${p.slug}">RESTORE</button>`}
   </div>`;
 }
 const fmtN = n => n >= 1e3 ? (n/1e3).toFixed(1)+'k' : String(n||0);
