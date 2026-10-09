@@ -18,9 +18,6 @@ button,input,textarea{font:inherit;color:inherit}
 .logo{font:800 34px/1 "Arial Black",Helvetica,sans-serif;color:#111;
   letter-spacing:1px;display:flex;align-items:center;gap:6px}
 .logo:hover{color:#111}
-.logo-mark{display:inline-flex;align-items:center;justify-content:center;
-  width:34px;height:34px;background:var(--nav);color:var(--green);
-  font:900 22px/1 Impact,sans-serif;border-radius:3px;transform:skewX(-8deg)}
 
 /* ---------- navbar ---------- */
 .navbar{background:var(--nav);position:sticky;top:0;z-index:50}

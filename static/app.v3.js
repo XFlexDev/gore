@@ -246,7 +246,7 @@ function renderAbout() {
   $('#ptitle').textContent = 'Rules';
   $('#crumb').textContent = 'Rules';
   app.innerHTML = `<div class="panel"><div class="p-desc" style="padding:16px">
-<p><b>GORE</b> — uncensored, user-uploaded media. The raw feed.</p>
+<p><b>gore</b> — uncensored, user-uploaded media. The raw feed.</p>
 <br>
 <p><b>Rules</b></p>
 <p>• You must be 18+ to view or upload.<br>
